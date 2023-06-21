@@ -36,16 +36,15 @@ def generate_zip():
     # zip = ZipFile(f"{folder}/informes_CF.zip", "w")    
     zip = ZipFile(os.path.join(os.path.dirname(__file__), '..', folder, "informes_CF.zip"), "w")
         
+    year = date.today().year
     cursor = connections['reports'].cursor()
     
-    #Query with separated groups
+    #Query with separated groups   
     query = f"""
-        SELECT DISTINCT ss.subject_id, stg.trainer_id, gr.name AS "group"
-        FROM master.subject_student ss
-        LEFT JOIN master.student st ON ss.student_id = st.id
-        LEFT JOIN master.group gr ON st.group_id = gr.id
-        LEFT JOIN master.subject_trainer_group stg ON ((ss.subject_id = stg.subject_id AND gr.id = stg.group_id) OR (ss.subject_id = stg.subject_id AND stg.group_id IS NULL))
-        ORDER BY ss.subject_id
+        SELECT DISTINCT degree, subject_code, trainer, "group"
+        FROM reports.answer 
+        WHERE "year"={year} and topic='Assignatura'
+        ORDER BY degree,subject_code
     """
 
     
@@ -53,53 +52,28 @@ def generate_zip():
     data = cursor.fetchall()    
     for row in data:
         #loading bbdd data
-        load_data(row[0], row[1], row[2])
+        load_data(row[0], row[1], row[2], row[3], year)
 
         #setting up extra data
         setup_data()
 
         #creating the HTML file
-        generate_file()
+        generate_file(row[0], row[1], row[2], row[3])
     
     zip.close()
 
     # download()
 
 
-def load_data(subject_id, trainer_id, group):
-    global trainer, course_code, mp_code, mp_name, group_name, global_data, legend_text, total_data, table_rows, comment_caption, table_columns        
+def load_data(degree, subject_code, trainer, group, year):
+    global course_code, mp_code, mp_name, group_name, global_data, legend_text, total_data, table_rows, comment_caption, table_columns        
     cursor = connections['reports'].cursor()
-
-    #LOADING MAIN COURSE DATA    
-    query = f"""
-                SELECT sub.code AS subject_code, sub.name AS subject_name, deg.code AS degree_code, deg.name AS degree_name 
-                FROM master.subject sub
-	                LEFT JOIN master.degree deg ON deg.id = sub.degree_id
-	            WHERE sub.id= {subject_id}
-            """
-
-    cursor.execute(query)
-    data = cursor.fetchone()
-
-    course_code = data[2]
-    mp_code = data[0]
-    mp_name = data[1]
-    group_name = group
-
-    #LOADING TRAINER DATA  
-    trainer = None
-    trainer_filter = "trainer is NULL"    
-    if trainer_id != None:
-        query = f"SELECT name FROM master.trainer WHERE id={trainer_id}"
-        cursor.execute(query)
-        trainer = cursor.fetchone()[0]
-        trainer_filter = f"trainer='{trainer}'"
 
     #LOADING GLOBAL SCORING DATA (score average per question)
     query = f"""
             SELECT question_statement, SUM(CAST(value AS FLOAT))/COUNT(question_statement) AS "value", question_sort 
             FROM reports.answer
-            WHERE degree='{course_code}' AND subject_code='{mp_code}' AND "group"='{group}' AND question_type='Numeric' AND {trainer_filter} AND EXTRACT(YEAR FROM "timestamp") = {date.today().year}
+            WHERE degree='{degree}' AND subject_code='{subject_code}' AND "group"='{group}' AND question_type='Numeric' AND trainer='{trainer}' AND "year"= {year}
             GROUP BY question_statement, question_sort
             ORDER BY question_sort
         """
@@ -116,7 +90,7 @@ def load_data(subject_id, trainer_id, group):
 
     query = f"""
             SELECT DISTINCT question_statement 
-            FROM reports.answer WHERE degree='{course_code}' AND subject_code='{mp_code}' AND "group"='{group}' AND question_type='Text' AND {trainer_filter} AND EXTRACT(YEAR FROM "timestamp") = {date.today().year}
+            FROM reports.answer WHERE degree='{degree}' AND subject_code='{subject_code}' AND "group"='{group}' AND question_type='Text' AND trainer='{trainer}' AND "year"= {year}
         """
     cursor.execute(query)
     data = cursor.fetchone()
@@ -130,7 +104,7 @@ def load_data(subject_id, trainer_id, group):
     query = f"""
             SELECT question_sort, COUNT("value") AS count, "value"::integer 
             FROM reports.answer
-            WHERE degree='{course_code}' AND subject_code='{mp_code}' AND "group"='{group}' AND question_type='Numeric' AND {trainer_filter} AND EXTRACT(YEAR FROM "timestamp") = {date.today().year}
+            WHERE degree='{degree}' AND subject_code='{subject_code}' AND "group"='{group}' AND question_type='Numeric' AND trainer='{trainer}' AND "year"= {year}
             GROUP BY question_sort, "value"
             ORDER BY question_sort, "value"
         """
@@ -153,7 +127,7 @@ def load_data(subject_id, trainer_id, group):
     query = f"""
             SELECT evaluation_id, timestamp, year, level, department, degree, "group", subject_code, subject_name, topic, question_sort, question_type, question_statement, TRIM("value")               
             FROM reports.answer
-            WHERE degree='{course_code}' AND subject_code='{mp_code}' AND "group"='{group}' AND {trainer_filter} AND EXTRACT(YEAR FROM "timestamp") = {date.today().year}
+            WHERE degree='{degree}' AND subject_code='{subject_code}' AND "group"='{group}' AND trainer='{trainer}' AND "year"= {year}
             ORDER BY degree, subject_code, question_sort
         """
     
@@ -215,7 +189,16 @@ def setup_data():
             'borderColor': '{legend_colors[i]}'
         """)
 
-def generate_file():    
+def generate_file(degree, subject_code, trainer, group):    
+    cursor = connections['reports'].cursor()
+    query = f"""
+            SELECT d.name FROM master.subject s 
+                LEFT JOIN master."degree" d ON d.id = s.degree_id 
+            WHERE d."code"='{degree}' AND s.code='{subject_code}'
+        """
+    cursor.execute(query)
+    data = cursor.fetchone()
+    
     template = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -223,7 +206,7 @@ def generate_file():
             <meta charset="UTF-8">
             <meta http-equiv="X-UA-Compatible" content="IE=edge">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Dashboard for {mp_code}: {mp_name} ({group_name})</title>
+            <title>Dashboard for {subject_code}: {data[0]} ({group})</title>
             <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/v/dt/jq-3.3.1/jszip-2.5.0/dt-1.10.24/b-1.7.0/b-colvis-1.7.0/b-html5-1.7.0/b-print-1.7.0/cr-1.5.3/kt-2.6.1/r-2.2.7/sp-1.2.2/datatables.min.css"/>
             <style>
                 body{{
@@ -449,8 +432,8 @@ def generate_file():
         
         <body>
             <header>
-                <h1>{course_code}</h1>
-                <h2>{mp_code}: {mp_name} ({group_name})</h2>
+                <h1>{degree}</h1>
+                <h2>{subject_code}: {data[0]} ({group})</h2>
             </header>
             <div class="box full">
                 <h3>Preguntes</h3>
@@ -505,7 +488,7 @@ def generate_file():
 
     original_stdout = sys.stdout
 
-    filename = f"informe_{course_code}_{mp_code}_{group_name}"
+    filename = f"informe_{degree}_{subject_code}_{group}"
     if trainer != None: filename = f"{filename}_{trainer}"
     filename = f"{filename}.html"
 
