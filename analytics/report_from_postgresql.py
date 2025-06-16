@@ -73,7 +73,7 @@ def load_data(degree, subject_code, trainer, group, year):
     query = f"""
             SELECT question_statement, SUM(CAST(value AS FLOAT))/COUNT(question_statement) AS "value", question_sort 
             FROM reports.answer
-            WHERE degree='{degree}' AND subject_code='{subject_code}' AND "group"='{group}' AND question_type='Numeric' AND trainer='{trainer}' AND "year"= {year}
+            WHERE degree='{degree}' AND subject_code='{subject_code}' AND "group"='{group}' AND question_type='Numeric' AND value <> '' AND trainer='{trainer}' AND "year"= {year}
             GROUP BY question_statement, question_sort
             ORDER BY question_sort
         """
@@ -104,7 +104,7 @@ def load_data(degree, subject_code, trainer, group, year):
     query = f"""
             SELECT question_sort, COUNT("value") AS count, "value"::integer 
             FROM reports.answer
-            WHERE degree='{degree}' AND subject_code='{subject_code}' AND "group"='{group}' AND question_type='Numeric' AND trainer='{trainer}' AND "year"= {year}
+            WHERE degree='{degree}' AND subject_code='{subject_code}' AND "group"='{group}' AND question_type='Numeric' AND value <> '' AND trainer='{trainer}' AND "year"= {year}
             GROUP BY question_sort, "value"
             ORDER BY question_sort, "value"
         """
@@ -190,15 +190,19 @@ def setup_data():
         """)
 
 def generate_file(degree, subject_code, trainer, group):    
+    #TODO: This code fails when no subject data is on the BBDD (example, new subject for DAW). Reports table should work by itself...
     cursor = connections['reports'].cursor()
     query = f"""
-            SELECT d.name FROM master.subject s 
+            SELECT s.name FROM master.subject s 
                 LEFT JOIN master."degree" d ON d.id = s.degree_id 
             WHERE d."code"='{degree}' AND s.code='{subject_code}'
         """
     cursor.execute(query)
     data = cursor.fetchone()
     
+    if data == None:
+        raise ValueError(f"Unable to get the subject_code '{subject_code}' for the degree '{degree}'. Please, insert the needed data into the BBDD (master.subject).")
+
     template = f"""
     <!DOCTYPE html>
     <html lang="en">
