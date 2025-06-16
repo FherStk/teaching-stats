@@ -83,8 +83,9 @@ def download_reports(request):
                 response['Content-Disposition'] = 'inline; filename=' + os.path.basename(file_path)
                 return response
         raise Http404
-    except:
-        return HttpResponseRedirect(reverse('analytics:unidentified_staff'))   
+    except Exception as e: 
+        raise e
+        #return HttpResponseRedirect(reverse('analytics:unidentified_staff'))   
 
 
 def logged_out(request):
