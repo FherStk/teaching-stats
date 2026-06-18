@@ -237,6 +237,8 @@ def generate_file(degree, subject_code, trainer, group, subjects, aliases):
     avg_chart_height = max(320, n_questions * 100)
     short_labels = [f"P{i+1}" for i in range(n_questions)]
     export_cols = ', '.join(f'{{data: "{c}"}}' for c in table_columns)
+    canonical_trainers = [aliases.get(t.strip(), t.strip()) for t in trainer.replace("/", ",").split(",") if t.strip()]
+    trainer_display = ", ".join(canonical_trainers)
 
     template = f"""<!DOCTYPE html>
 <html lang="ca">
@@ -248,15 +250,17 @@ def generate_file(degree, subject_code, trainer, group, subjects, aliases):
     <style>
         *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
         :root {{
-            --brand: #ad0050; --brand-dark: #8a003f;
+            --brand: #970A2C; --brand-dark: #7a0822;
             --bg: #f5f7fa; --card: #ffffff; --border: #e2e8f0;
             --text: #1a202c; --muted: #718096;
             --shadow: 0 1px 3px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.04);
         }}
         body {{ font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); font-size: 15px; line-height: 1.5; }}
-        header {{ background: var(--brand); color: #fff; padding: 20px 28px; }}
-        header h1 {{ font-size: 1.35rem; font-weight: 700; }}
-        header p {{ font-size: .92rem; opacity: .82; margin-top: 3px; }}
+        header {{ background: #fff; color: var(--text); padding: 16px 28px; display: flex; align-items: center; gap: 20px; border-bottom: 4px solid var(--brand); box-shadow: var(--shadow); }}
+        header img {{ height: 52px; width: auto; flex-shrink: 0; }}
+        .header-text {{ border-left: 2px solid var(--brand); padding-left: 20px; }}
+        header h1 {{ font-size: 1.5rem; font-weight: 800; color: var(--brand); letter-spacing: -.01em; }}
+        header p {{ font-size: .95rem; color: var(--muted); margin-top: 5px; font-weight: 500; letter-spacing: .02em; }}
         main {{ max-width: 1100px; margin: 0 auto; padding: 20px 16px 40px; }}
         .kpi-row {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }}
         .kpi {{ background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; box-shadow: var(--shadow); }}
@@ -280,8 +284,11 @@ def generate_file(degree, subject_code, trainer, group, subjects, aliases):
 </head>
 <body>
 <header>
-    <h1>{degree} · {subject_code}: {subject_name}</h1>
-    <p>Grup {group}</p>
+    <img src="https://elpuig.xeill.net/logo.png" alt="Institut Puig Castellar">
+    <div class="header-text">
+        <h1>{degree} · {subject_code}: {subject_name}</h1>
+        <p>{trainer_display} · Grup {group}</p>
+    </div>
 </header>
 <main>
     <div class="kpi-row">
