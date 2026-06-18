@@ -41,3 +41,5 @@ log/*
 
 # VS Code editor data
 .vscode/*
+.env
+reports/*
