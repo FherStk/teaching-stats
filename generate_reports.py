@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 #!/usr/bin/env python
 import csv
+import json
 import os
 import sys
-from random import randrange
 from datetime import date
 from pathlib import Path
 
@@ -93,17 +93,17 @@ global_data     = []
 legend_text     = []
 total_data      = []
 table_rows      = []
-legend_colors   = []
-legend_summary  = []
-legend_list     = []
-total_graph     = []
+n_respondents   = 0
+n_comments      = 0
+bar_colors      = []
+dist_colors     = []
 
 
 # ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
 def load_data(degree, subject_code, trainer, group, year, cursor):
-    global global_data, legend_text, total_data, table_rows, comment_caption
+    global global_data, legend_text, total_data, table_rows, comment_caption, n_respondents, n_comments
 
     # Average score per question
     cursor.execute(f"""
@@ -144,11 +144,11 @@ def load_data(degree, subject_code, trainer, group, year, cursor):
     question_scores = [0] * 10
     for row in cursor.fetchall():
         if row[0] != question_sort:
-            total_data.append(f"[{', '.join(str(x) for x in question_scores)}]")
+            total_data.append(list(question_scores))
             question_sort   = row[0]
             question_scores = [0] * 10
         question_scores[row[2] - 1] = row[1]
-    total_data.append(question_scores)
+    total_data.append(list(question_scores))
 
     # Full answer detail rows (for datatable / export)
     cursor.execute(f"""
@@ -161,51 +161,66 @@ def load_data(degree, subject_code, trainer, group, year, cursor):
         ORDER BY degree, subject_code, question_sort
     """)
     table_rows = []
-    esc = "\\'"
     for row in cursor.fetchall():
-        table_rows.append(f"""
-            '{table_columns[0]}': '{row[0]}',
-            '{table_columns[1]}': '{row[1]}',
-            '{table_columns[2]}': '{row[2]}',
-            '{table_columns[3]}': '{"" if row[3]  is None else row[3].replace("'",  esc)}',
-            '{table_columns[4]}': '{"" if row[4]  is None else row[4].replace("'",  esc)}',
-            '{table_columns[5]}': '{"" if row[5]  is None else row[5].replace("'",  esc)}',
-            '{table_columns[6]}': '{"" if row[6]  is None else row[6].replace("'",  esc)}',
-            '{table_columns[7]}': '{"" if row[7]  is None else row[7].replace("'",  esc)}',
-            '{table_columns[8]}': '{"" if row[8]  is None else row[8].replace("'",  esc)}',
-            '{table_columns[9]}': '{row[9]}',
-            '{table_columns[10]}': '{row[10]}',
-            '{table_columns[11]}': '{row[11]}',
-            '{table_columns[12]}': '{"" if row[12] is None else row[12].replace("'", esc)}',
-            '{table_columns[13]}': '{"" if row[13] is None else row[13].replace("'", esc)}',
-        """.replace("'None'", "''").replace('\r', '').replace('\n', ''))
+        table_rows.append({
+            table_columns[0]:  str(row[0])  if row[0]  is not None else "",
+            table_columns[1]:  str(row[1])  if row[1]  is not None else "",
+            table_columns[2]:  str(row[2])  if row[2]  is not None else "",
+            table_columns[3]:  str(row[3])  if row[3]  is not None else "",
+            table_columns[4]:  str(row[4])  if row[4]  is not None else "",
+            table_columns[5]:  str(row[5])  if row[5]  is not None else "",
+            table_columns[6]:  str(row[6])  if row[6]  is not None else "",
+            table_columns[7]:  str(row[7])  if row[7]  is not None else "",
+            table_columns[8]:  str(row[8])  if row[8]  is not None else "",
+            table_columns[9]:  str(row[9])  if row[9]  is not None else "",
+            table_columns[10]: str(row[10]) if row[10] is not None else "",
+            table_columns[11]: str(row[11]) if row[11] is not None else "",
+            table_columns[12]: str(row[12]) if row[12] is not None else "",
+            table_columns[13]: str(row[13]).strip() if row[13] is not None else "",
+        })
+
+    # Unique respondents (numeric questions only)
+    cursor.execute(f"""
+        SELECT COUNT(DISTINCT evaluation_id)
+        FROM reports.answer
+        WHERE degree='{degree}' AND subject_code='{subject_code}' AND "group"='{group}'
+              AND trainer='{trainer}' AND "year"={year} AND question_type='Numeric'
+    """)
+    n_respondents = (cursor.fetchone() or [0])[0] or 0
+
+    # Non-empty text comments
+    cursor.execute(f"""
+        SELECT COUNT(*)
+        FROM reports.answer
+        WHERE degree='{degree}' AND subject_code='{subject_code}' AND "group"='{group}'
+              AND trainer='{trainer}' AND "year"={year}
+              AND question_type='Text' AND TRIM(value) <> ''
+    """)
+    n_comments = (cursor.fetchone() or [0])[0] or 0
 
 
 def setup_data():
-    global legend_colors, legend_summary, legend_list, total_graph
+    global bar_colors, dist_colors
 
-    legend_colors = [
-        "rgb(255, 99, 132, 0.25)",
-        "rgb(75, 192, 192, 0.25)",
-        "rgb(255, 205, 86, 0.25)",
-        "rgb(54, 162, 235, 0.25)",
-    ]
-    for _ in range(len(legend_text) - len(legend_colors)):
-        legend_colors.append(f"rgb({randrange(255)}, {randrange(255)}, {randrange(255)}, 0.25)")
+    def _traffic_light(score):
+        if score < 5.0:   return "rgba(220, 53, 69, 0.85)"
+        elif score < 7.0: return "rgba(255, 140, 0, 0.85)"
+        elif score < 8.5: return "rgba(255, 193, 7, 0.85)"
+        else:             return "rgba(40, 167, 69, 0.85)"
 
-    legend_summary = [f"Pregunta {i+1}" for i in range(len(legend_text))]
-    legend_list    = [
-        f"<div class='icon' style='background-color: {legend_colors[i]};'></div>{legend_text[i]}"
-        for i in range(len(legend_text))
-    ]
-    total_graph = [
-        f"""
-            'label': 'Quantitat de valoracions en {legend_summary[i].lower()}',
-            'data':  {total_data[i]},
-            'backgroundColor': '{legend_colors[i]}',
-            'borderColor': '{legend_colors[i]}'
-        """
-        for i in range(len(legend_text))
+    bar_colors = [_traffic_light(v) for v in global_data]
+
+    dist_colors = [
+        "rgba(220, 53, 69, 0.8)",
+        "rgba(233, 80, 48, 0.8)",
+        "rgba(242, 110, 28, 0.8)",
+        "rgba(247, 148, 15, 0.8)",
+        "rgba(255, 193, 7, 0.8)",
+        "rgba(210, 210, 25, 0.8)",
+        "rgba(155, 210, 35, 0.8)",
+        "rgba(90, 200, 55, 0.8)",
+        "rgba(52, 185, 65, 0.8)",
+        "rgba(40, 167, 69, 0.8)",
     ]
 
 
@@ -217,288 +232,275 @@ def generate_file(degree, subject_code, trainer, group, subjects, aliases):
             "Añade la fila correspondiente al fichero."
         )
 
+    n_questions = len(legend_text)
+    overall_avg = f"{sum(global_data)/n_questions:.1f}/10" if global_data else "—"
+    avg_chart_height = max(320, n_questions * 100)
+    short_labels = [f"P{i+1}" for i in range(n_questions)]
+    export_cols = ', '.join(f'{{data: "{c}"}}' for c in table_columns)
+
     template = f"""<!DOCTYPE html>
-<html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta http-equiv="X-UA-Compatible" content="IE=edge">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Dashboard for {subject_code}: {subject_name} ({group})</title>
-        <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/v/dt/jq-3.3.1/jszip-2.5.0/dt-1.10.24/b-1.7.0/b-colvis-1.7.0/b-html5-1.7.0/b-print-1.7.0/cr-1.5.3/kt-2.6.1/r-2.2.7/sp-1.2.2/datatables.min.css"/>
-        <style>
-            body{{
-                background-color: whitesmoke;
-                padding-bottom: 10px;
-            }}
-            body,
-            h1{{
-                margin: 0px;
-                font-family: 'Trebuchet MS', 'Lucida Sans Unicode', 'Lucida Grande', 'Lucida Sans', Arial, sans-serif;
-            }}
-            header{{
-                background-color: #ad0050;
-                color: white;
-                padding: 10px;
-            }}
-            h1{{
-                padding: 0px;
-            }}
-            h2{{
-                font-weight: normal;
-            }}
-            .canvas,
-            .table{{
-                position: relative;
-                width:100%;
-            }}
-            .canvas{{
-                padding-bottom: 20px;
-                height:400px !important;
-            }}
-            .box{{
-                width: calc(50% - 36px);
-                border: solid 1px grey;
-                box-shadow: 1px 1px 10px #888888;
-                border-radius: 5px;
-                margin: 10px 10px 0px 10px;
-                padding: 0px 10px 10px 10px;
-                background-color: white;
-            }}
-            .left{{
-                float: left;
-                margin-right: 5px;
-            }}
-            .right{{
-                float: right;
-                margin-left: 5px;
-            }}
-            .full{{
-                width: calc(100% - 42px);
-                padding: 0px 10px 10px 10px;
-            }}
-            .clear{{
-                clear: both;
-            }}
-            .content{{
-                width: 100%;
-                display: flex;
-            }}
-            .box h3{{
-                margin-top: 10px;
-            }}
-            .box ol{{
-                padding-left: 20px;
-                margin-left: 40px;
-            }}
-            .box li{{
-                cursor: pointer;
-            }}
-            .box li:hover{{
-                color: darkgray;
-            }}
-            .box li.cross{{
-                text-decoration: line-through;
-            }}
-            .box li .icon{{
-                width: 28px;
-                height: 10px;
-                background-color: red;
-                position: relative;
-                display: inline-block;
-                margin-left: -60px;
-                margin-right: 35px;
-            }}
-            .hide table,
-            .hide #export_filter,
-            .hide #export_info,
-            .hide #export_paginate{{
-                display: none;
-            }}
-            .hide .dt-buttons{{
-                margin-left: 10px;
-            }}
-            @media only screen and (max-width: 800px) {{
-                .content{{
-                    display: inline;
-                }}
-                .left,
-                .right {{
-                    float: none;
-                    display: block;
-                    margin:10px;
-                    width: calc(100% - 42px);
-                }}
-            }}
-        </style>
-        <script src="https://cdn.jsdelivr.net/npm/chart.js@3.2.1/dist/chart.min.js"></script>
-        <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.36/pdfmake.min.js"></script>
-        <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.36/vfs_fonts.js"></script>
-        <script type="text/javascript" src="https://cdn.datatables.net/v/dt/jq-3.3.1/jszip-2.5.0/dt-1.10.24/af-2.3.6/b-1.7.0/b-colvis-1.7.0/b-html5-1.7.0/b-print-1.7.0/cr-1.5.3/kt-2.6.1/r-2.2.7/sp-1.2.2/datatables.min.js"></script>
-        <script type="text/javascript">
-            window.onload = function () {{
-                $.fn.dataTable.ext.search.push(
-                    function (settings, searchData, index, rowData, counter) {{
-                        if(settings.sTableId == "export") return true;
-                        else return !(rowData["question_type"] === 'Numeric' || rowData["value"] === '');
-                }});
+<html lang="ca">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Informe {subject_code}: {subject_name} ({group})</title>
+    <link rel="stylesheet" href="https://cdn.datatables.net/v/dt/jq-3.3.1/jszip-2.5.0/dt-1.10.24/b-1.7.0/b-html5-1.7.0/datatables.min.css"/>
+    <style>
+        *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        :root {{
+            --brand: #ad0050; --brand-dark: #8a003f;
+            --bg: #f5f7fa; --card: #ffffff; --border: #e2e8f0;
+            --text: #1a202c; --muted: #718096;
+            --shadow: 0 1px 3px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.04);
+        }}
+        body {{ font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); font-size: 15px; line-height: 1.5; }}
+        header {{ background: var(--brand); color: #fff; padding: 20px 28px; }}
+        header h1 {{ font-size: 1.35rem; font-weight: 700; }}
+        header p {{ font-size: .92rem; opacity: .82; margin-top: 3px; }}
+        main {{ max-width: 1100px; margin: 0 auto; padding: 20px 16px 40px; }}
+        .kpi-row {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }}
+        .kpi {{ background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; box-shadow: var(--shadow); }}
+        .kpi-value {{ font-size: 2rem; font-weight: 700; color: var(--brand); line-height: 1.1; }}
+        .kpi-label {{ font-size: .75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-top: 4px; }}
+        .card {{ background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 22px 26px; box-shadow: var(--shadow); margin-bottom: 20px; }}
+        .card-title {{ font-size: .78rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; margin-bottom: 18px; }}
+        .chart-wrap {{ position: relative; }}
+        .search-bar {{ display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }}
+        .search-bar input {{ flex: 1; padding: 9px 14px; border: 1px solid var(--border); border-radius: 6px; font-size: .95rem; font-family: inherit; outline: none; transition: border-color .15s; }}
+        .search-bar input:focus {{ border-color: var(--brand); box-shadow: 0 0 0 3px rgba(173,0,80,.1); }}
+        .search-bar .count {{ font-size: .82rem; color: var(--muted); white-space: nowrap; }}
+        mark {{ background: #fef08a; border-radius: 2px; padding: 0 2px; }}
+        #comments td {{ font-size: .95rem; line-height: 1.65; padding: 10px 14px !important; }}
+        .export-row {{ text-align: right; margin-bottom: 6px; }}
+        .export-btn {{ display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; background: var(--brand); color: #fff; border: none; border-radius: 6px; font-size: .85rem; font-family: inherit; cursor: pointer; }}
+        .export-btn:hover {{ background: var(--brand-dark); }}
+        #export-wrap {{ display: none; }}
+        @media (max-width: 600px) {{ .kpi-row {{ grid-template-columns: repeat(2, 1fr); }} }}
+    </style>
+</head>
+<body>
+<header>
+    <h1>{degree} · {subject_code}: {subject_name}</h1>
+    <p>Grup {group}</p>
+</header>
+<main>
+    <div class="kpi-row">
+        <div class="kpi"><div class="kpi-value">{n_respondents}</div><div class="kpi-label">Alumnes</div></div>
+        <div class="kpi"><div class="kpi-value">{n_questions}</div><div class="kpi-label">Preguntes</div></div>
+        <div class="kpi"><div class="kpi-value">{overall_avg}</div><div class="kpi-label">Mitjana global</div></div>
+        <div class="kpi"><div class="kpi-value">{n_comments}</div><div class="kpi-label">Comentaris</div></div>
+    </div>
 
-                const globalData = {{
-                    labels:  [{(', '.join('"' + item + '"' for item in legend_summary))}],
-                    datasets: [
-                        {{
-                            label: 'Valoració mitjana',
-                            data:  [{(', '.join("'" + str(round(item, 2)) + "'" for item in global_data))}],
-                            backgroundColor: [{(', '.join('"' + item + '"' for item in legend_colors))}],
-                            borderColor: [{(', '.join('"' + item + '"' for item in legend_colors))}]
-                        }}
-                    ]
-                }};
-                const totalData = {{
-                    labels:  [{(', '.join("'" + str(item) + (" punt" if item == 1 else " punts") + "'" for item in range(1, 11)))}],
-                    datasets:  [{(', '.join('{' + item + '}' for item in total_graph))}]
-                }};
-                var fullData = [{(', '.join('{' + item + '}' for item in table_rows))}];
+    <div class="card">
+        <div class="card-title">Valoració mitjana per pregunta</div>
+        <div class="chart-wrap" style="height:{avg_chart_height}px">
+            <canvas id="avgChart"></canvas>
+        </div>
+    </div>
 
-                var globalChart = new Chart(document.getElementById('globalChart'), {{
-                    type: 'bar',
-                    data: globalData,
-                    options: {{
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        scales: {{
-                            x:{{
-                                title: {{
-                                    display: true,
-                                    text: 'Pregunta'
-                                }}
-                            }},
-                            y:{{
-                                suggestedMin: 0,
-                                suggestedMax: 10,
-                                title: {{
-                                    display: true,
-                                    text: 'Mitjana de valoracions'
-                                }}
-                            }}
-                        }},
-                        plugins: {{
-                            legend: {{
-                                display: false
-                            }}
-                        }}
-                    }},
-                }});
-                var totalChart = new Chart(document.getElementById('totalChart'), {{
-                    type: 'bar',
-                    data: totalData,
-                    options: {{
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        scales: {{
-                            x:{{
-                                title: {{
-                                    display: true,
-                                    text: 'Puntuació'
-                                }}
-                            }},
-                            y:{{
-                                title: {{
-                                    display: true,
-                                    text: 'Quantitat de valoracions'
-                                }}
-                            }}
-                        }},
-                        plugins: {{
-                            legend: {{
-                                display: false
-                            }}
-                        }}
-                    }},
-                }});
-                $('#comments').DataTable({{
-                    data: fullData,
-                    columns: [{{data: "value"}}]
-                }});
-                $('#export').DataTable({{
-                    data: fullData,
-                    columns: [{(', '.join('{data: "' + item + '"}' for item in table_columns))}],
-                    dom: 'Bfrtip',
-                    buttons: ['copy', 'excel']
-                }});
+    <div class="card">
+        <div class="card-title">Distribució de puntuacions per pregunta</div>
+        <div class="chart-wrap" style="height:320px">
+            <canvas id="distChart"></canvas>
+        </div>
+    </div>
 
-                var legendItems = document.querySelector('#legend').getElementsByTagName('li');
-                for (var i = 0; i < legendItems.length; i++) {{
-                    legendItems[i].addEventListener("click", legendClickCallback.bind(this,i), false);
-                }}
-                function legendClickCallback(legendItemIndex){{
-                    var legendItem = document.querySelector('#legend').getElementsByTagName('li')[legendItemIndex];
-                    legendItem.classList.toggle("cross");
-                    document.querySelectorAll('canvas').forEach((chartItem,index)=>{{
-                        var chart = Chart.instances[index];
-                        if(chart.canvas.id == "globalChart") chart.toggleDataVisibility(legendItemIndex);
-                        else chart.data.datasets[legendItemIndex].hidden = !(chart.data.datasets[legendItemIndex].hidden ?? false);
-                        chart.update();
+    <div class="card">
+        <div class="card-title">Comentaris</div>
+        <div class="search-bar">
+            <input type="search" id="commentSearch" placeholder="Cerca paraules clau…" autocomplete="off">
+            <span class="count" id="commentCount"></span>
+        </div>
+        <table id="comments" style="width:100%">
+            <thead><tr><th>{comment_caption or "Comentari"}</th></tr></thead>
+        </table>
+    </div>
+
+    <div class="export-row">
+        <button class="export-btn" id="exportTrigger">&#x2193; Exporta dades completes (Excel)</button>
+    </div>
+    <div id="export-wrap">
+        <table id="export">
+            <thead><tr>{(''.join('<th>' + c + '</th>' for c in table_columns))}</tr></thead>
+        </table>
+    </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@3.2.1/dist/chart.min.js"></script>
+<script src="https://cdn.datatables.net/v/dt/jq-3.3.1/jszip-2.5.0/dt-1.10.24/af-2.3.6/b-1.7.0/b-html5-1.7.0/datatables.min.js"></script>
+<script>
+    const avgLabels   = {json.dumps(legend_text)};
+    const shortLabels = {json.dumps(short_labels)};
+    const avgData     = {json.dumps([round(v, 2) for v in global_data])};
+    const avgColors   = {json.dumps(bar_colors)};
+    const distData    = {json.dumps(total_data)};
+    const distColors  = {json.dumps(dist_colors)};
+    const fullData    = {json.dumps(table_rows)};
+
+    function wrapLabel(text, maxLen) {{
+        var words = text.split(' '), lines = [], current = '';
+        for (var i = 0; i < words.length; i++) {{
+            var candidate = current ? current + ' ' + words[i] : words[i];
+            if (candidate.length > maxLen && current) {{ lines.push(current); current = words[i]; }}
+            else {{ current = candidate; }}
+        }}
+        if (current) lines.push(current);
+        return lines;
+    }}
+    const wrappedAvgLabels = avgLabels.map(function(l) {{ return wrapLabel(l, 38); }});
+
+    // Chart 1: horizontal average bars
+    new Chart(document.getElementById('avgChart'), {{
+        type: 'bar',
+        data: {{
+            labels: wrappedAvgLabels,
+            datasets: [{{
+                label: 'Valoració mitjana',
+                data: avgData,
+                backgroundColor: avgColors,
+                borderColor: avgColors,
+                borderWidth: 1,
+                borderRadius: 4,
+            }}]
+        }},
+        options: {{
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {{
+                x: {{ min: 0, max: 10, title: {{ display: true, text: 'Puntuació (0–10)' }} }},
+                y: {{ ticks: {{ font: {{ size: 13 }}, autoSkip: false }} }}
+            }},
+            plugins: {{
+                legend: {{ display: false }},
+                tooltip: {{ callbacks: {{
+                    title: function(items) {{ return avgLabels[items[0].dataIndex]; }},
+                    label: function(ctx) {{ return ' Mitjana: ' + ctx.raw.toFixed(2) + '/10'; }}
+                }} }}
+            }}
+        }},
+        plugins: [{{
+            id: 'valueLabels',
+            afterDraw(chart) {{
+                const ctx2 = chart.ctx;
+                chart.data.datasets.forEach((ds, i) => {{
+                    chart.getDatasetMeta(i).data.forEach((bar, idx) => {{
+                        const val = ds.data[idx];
+                        ctx2.save();
+                        ctx2.fillStyle = '#1a202c';
+                        ctx2.font = 'bold 12px system-ui, sans-serif';
+                        ctx2.textAlign = 'left';
+                        ctx2.textBaseline = 'middle';
+                        ctx2.fillText(val.toFixed(1), bar.x + 6, bar.y);
+                        ctx2.restore();
                     }});
+                }});
+            }}
+        }}]
+    }});
+
+    // Chart 2: stacked distribution
+    new Chart(document.getElementById('distChart'), {{
+        type: 'bar',
+        data: {{
+            labels: shortLabels,
+            datasets: distColors.map(function(color, s) {{
+                return {{
+                    label: (s + 1) + (s === 0 ? ' punt' : ' punts'),
+                    data: distData.map(function(q) {{ return q[s]; }}),
+                    backgroundColor: color,
+                    borderColor: '#fff',
+                    borderWidth: 1,
+                }};
+            }})
+        }},
+        options: {{
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {{
+                x: {{ stacked: true, title: {{ display: true, text: 'Pregunta' }} }},
+                y: {{ stacked: true, title: {{ display: true, text: 'Nombre de respostes' }} }}
+            }},
+            plugins: {{
+                legend: {{ position: 'bottom', labels: {{ boxWidth: 14, font: {{ size: 11 }} }} }},
+                tooltip: {{
+                    callbacks: {{
+                        title: function(items) {{ return avgLabels[items[0].dataIndex]; }},
+                        label: function(ctx) {{
+                            return ' ' + ctx.raw + ' alumne' + (ctx.raw !== 1 ? 's' : '') + ' → ' + ctx.dataset.label;
+                        }}
+                    }}
                 }}
-            }};
-        </script>
-    <head>
+            }}
+        }}
+    }});
 
-    <body>
-        <header>
-            <h1>{degree}</h1>
-            <h2>{subject_code}: {subject_name} ({group})</h2>
-        </header>
-        <div class="box full">
-            <h3>Preguntes</h3>
-            <ol id="legend">
-                {(''.join('<li>' + item + '</li>' for item in legend_list))}
-            </ol>
-        </div>
-        <div class="content">
-            <div class="box left">
-                <h3>Valoracions totals (quantitat de puntuacions per pregunta)</h3>
-                <div class="canvas">
-                    <canvas id="totalChart"></canvas>
-                </div>
-            </div>
-            <div class="box right">
-                <h3>Valoracions globals (mitjana de valoracions per pregunta)</h3>
-                <div class="canvas">
-                    <canvas id="globalChart"></canvas>
-                </div>
-            </div>
-        </div>
-        <div class="clear"></div>
+    // Comments table
+    const textData = fullData.filter(function(r) {{ return r.question_type === 'Text' && r.value.trim() !== ''; }});
+    const tbl = $('#comments').DataTable({{
+        data: textData,
+        columns: [{{data: 'value'}}],
+        dom: 'rtip',
+        pageLength: 25,
+        language: {{
+            info: 'Mostrant _START_–_END_ de _TOTAL_ comentaris',
+            infoEmpty: 'Cap comentari',
+            infoFiltered: ' (filtrats de _MAX_)',
+            paginate: {{ previous: '‹', next: '›' }},
+            zeroRecords: 'Cap resultat per a aquesta cerca',
+        }}
+    }});
 
-        <div class="box full">
-            <h3>Comentaris</h3>
-            <div class="table">
-                <table id="comments" style="width:100%">
-                    <thead>
-                        <tr>
-                            <th>{comment_caption}</th>
-                        </tr>
-                    </thead>
-                </table>
-            </div>
-        </div>
+    function updateCount() {{
+        var info = tbl.page.info();
+        document.getElementById('commentCount').textContent =
+            info.recordsTotal === info.recordsDisplay
+                ? info.recordsTotal + ' comentari' + (info.recordsTotal !== 1 ? 's' : '')
+                : info.recordsDisplay + ' de ' + info.recordsTotal + ' comentaris';
+    }}
 
-        <div class="box hide full">
-            <h3>Exportació de dades</h3>
-            <table id="export">
-                <thead>
-                    <tr>
-                        {(''.join('<th>' + item + '</th>' for item in table_columns))}
-                    </tr>
-                </thead>
-            </table>
-        </div>
+    function applyHighlight(term) {{
+        document.querySelectorAll('#comments td').forEach(function(td) {{
+            var raw = td.dataset.raw !== undefined ? td.dataset.raw : td.textContent;
+            td.dataset.raw = raw;
+            if (!term.trim()) {{ td.innerHTML = raw; return; }}
+            var lower = raw.toLowerCase();
+            var lterm = term.toLowerCase();
+            var result = '';
+            var pos = 0;
+            var idx;
+            while ((idx = lower.indexOf(lterm, pos)) !== -1) {{
+                result += raw.slice(pos, idx) + '<mark>' + raw.slice(idx, idx + lterm.length) + '</mark>';
+                pos = idx + lterm.length;
+            }}
+            result += raw.slice(pos);
+            td.innerHTML = result;
+        }});
+    }}
 
-    </body>
+    tbl.on('draw.dt', function() {{
+        updateCount();
+        applyHighlight(document.getElementById('commentSearch').value.trim());
+    }});
+    tbl.draw();
 
-</html>
-"""
+    document.getElementById('commentSearch').addEventListener('input', function() {{
+        tbl.search(this.value).draw();
+    }});
+
+    // Export
+    var exportTbl = $('#export').DataTable({{
+        data: fullData,
+        columns: [{export_cols}],
+        dom: 'Bfrtip',
+        buttons: [{{ extend: 'excel', filename: 'informe_{degree}_{subject_code}_{group}' }}],
+        paging: false,
+        searching: false,
+    }});
+    document.getElementById('exportTrigger').addEventListener('click', function() {{ exportTbl.button(0).trigger(); }});
+</script>
+</body>
+</html>"""
 
     filename = f"informe_{degree}_{subject_code}_{group}.html"
     individual_trainers = [t.strip() for t in trainer.replace("/", ",").split(",") if t.strip()]
